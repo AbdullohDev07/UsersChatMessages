@@ -1,4 +1,6 @@
 ﻿using Npgsql;
+using System.Security.Cryptography;
+using System.Text;
 using System.Xml.Linq;
 class Program
 {
@@ -89,13 +91,18 @@ class Program
         }
     }
 
+    
+
     public static bool inUser(string username, string password)
     {
+        const int keySize = 64;
+        const int iterations = 350000;
+        HashAlgorithmName hashAlgorithm = HashAlgorithmName.SHA512;
         using (NpgsqlConnection connection = new NpgsqlConnection(connectionString))
         {
             connection.Open();
 
-            string query = $"select username, password from users;";
+            string query = $"select username, password,salt from users;";
             using NpgsqlCommand cmd = new NpgsqlCommand(query, connection);
 
             var result = cmd.ExecuteReader();
@@ -103,7 +110,7 @@ class Program
             {
                 if (result[0].ToString() == username)
                 {
-                    if (result[1].ToString() == password)
+                    if (DeHashPassword(password, result[1].ToString(), result[2].ToString(),keySize,iterations,hashAlgorithm))
                     {
                         Console.WriteLine("\nIn to the account");
                         return true;
@@ -125,14 +132,54 @@ class Program
         using (NpgsqlConnection connection = new NpgsqlConnection(connectionString))
         {
             connection.Open();
-
-            string query = $"insert into users(username, password) values ('{username}', '{password}');";
+            password = HashPasword(password, out byte[]? solt);
+            string query = $"insert into users(username, password, salt) values ('{username}', '{password}', '{Convert.ToHexString(solt)}');";
             using NpgsqlCommand cmd = new NpgsqlCommand(query, connection);
 
             cmd.ExecuteNonQuery();
             Console.WriteLine("\nAdd New User");
         }
     }
+
+
+    public static string HashPasword(string password, out byte[] salt)
+    {
+        const int keySize = 64;
+        const int iterations = 350000;
+        HashAlgorithmName hashAlgorithm = HashAlgorithmName.SHA512;
+
+        salt = RandomNumberGenerator.GetBytes(keySize);
+
+        var hash = Rfc2898DeriveBytes.Pbkdf2(
+            Encoding.UTF8.GetBytes(password),
+            salt,
+            iterations,
+            hashAlgorithm,
+            keySize);
+
+        return Convert.ToHexString(hash);
+    }
+    private static bool DeHashPassword(
+    string passwordFromUser,
+    string hashFromPg,
+    string saltAsStringFromPg,
+    int keySizeFromProgram,
+    int iterationsFromProgram,
+    HashAlgorithmName hashAlgorithmFromProgram)
+    {
+        byte[] salt = Convert.FromHexString(saltAsStringFromPg);
+
+        var hashToCompare = Rfc2898DeriveBytes.Pbkdf2(
+            password: passwordFromUser,
+            salt,
+            iterations: iterationsFromProgram,
+            hashAlgorithm: hashAlgorithmFromProgram,
+            outputLength: keySizeFromProgram);
+
+        return CryptographicOperations.FixedTimeEquals(hashToCompare, Convert.FromHexString(hashFromPg));
+    }
+
+
 
     public static bool checkUsers(string username)
     {
